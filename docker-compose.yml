@@ -1,0 +1,21 @@
+version: '3.9'
+services:
+  radio-bot:
+    build: .
+    container_name: radio-bot
+    restart: always
+    command: python bot/main.py
+    volumes:
+      - ./data:/app/data
+      - ./cache:/app/cache
+      - ./.env:/app/.env
+
+  radio-worker:
+    build: .
+    container_name: radio-worker
+    restart: always
+    command: python worker/stream_worker.py
+    volumes:
+      - ./data:/app/data
+      - ./cache:/app/cache
+      - ./.env:/app/.env

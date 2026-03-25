@@ -1,0 +1,5 @@
+highrise-bot-sdk>=24.1.0
+python-dotenv>=1.0.1
+yt-dlp
+aiohttp
+requests
