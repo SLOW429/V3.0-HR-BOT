@@ -10,6 +10,14 @@ from config import BOT_TOKEN, ROOM_ID, OWNER_USERNAME
 from storage import load_json, save_json
 from permissions import is_owner, is_dj, normalize
 from styles import ok, warn, error, info, accent, title
+from i18n import (
+    get_language,
+    set_language,
+    tr,
+    SUPPORTED_LANGUAGES,
+    normalize_language_code,
+    available_languages_text,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / 'data'
@@ -28,7 +36,7 @@ DEFAULT_LIB = []
 DEFAULT_CONTROL = {'action': None}
 DEFAULT_POINTS = {'points': {}, 'last_daily': {}, 'last_chat_reward': {}, 'last_active': {}}
 DEFAULT_HISTORY = []
-DJ_PRICE = 3500
+DJ_PRICE = 3000
 DJ_DAYS = 7
 DAILY_REWARD = 30
 MESSAGE_COOLDOWN = 120
@@ -52,10 +60,18 @@ class RadioBot(BaseBot):
     def __init__(self):
         super().__init__()
         self.roles = merge_dicts(DEFAULT_ROLES, load_json(ROLES_PATH, DEFAULT_ROLES))
+        self.roles.setdefault('djs', [])
+        self.roles.setdefault('role_expiries', {})
         self.queue = load_json(QUEUE_PATH, DEFAULT_QUEUE)
         self.library = load_json(LIB_PATH, DEFAULT_LIB)
         self.points = merge_dicts(DEFAULT_POINTS, load_json(POINTS_PATH, DEFAULT_POINTS))
         self.history = load_json(HISTORY_PATH, DEFAULT_HISTORY)
+
+    def lang(self) -> str:
+        return get_language()
+
+    def t(self, key: str, **kwargs) -> str:
+        return tr(key, self.lang(), **kwargs)
 
     def save_all(self):
         save_json(ROLES_PATH, self.roles)
@@ -109,16 +125,20 @@ class RadioBot(BaseBot):
         self.prune_expired_roles()
         return self.roles.get('role_expiries', {}).get(normalize(username), {})
 
+    def user_is_dj(self, username: str) -> bool:
+        return is_dj(username, OWNER_USERNAME, self.roles['djs'], self.roles.get('role_expiries', {}))
+
     async def on_start(self, session_metadata):
         print('Radio bot started.')
         try:
-            await self.highrise.teleport(session_metadata.user_id, Position(16.5, 13.5, 1.5, 'FrontLeft'))
+            await self.highrise.teleport(session_metadata.user_id, Position(16.0, 0.25, 26.0, 'FrontLeft'))
         except Exception as e:
             print(f'Bot teleport error: {e}')
 
     async def on_chat(self, user, message):
         try:
             msg = message.strip()
+            msg_cf = msg.casefold()
             uname = user.username
             uid = user.id
             now_ts = int(time.time())
@@ -129,128 +149,149 @@ class RadioBot(BaseBot):
                 self.points['last_chat_reward'][uid] = now_ts
                 self.save_all()
 
-            if msg.startswith('dj add'):
+            if msg_cf.startswith('dj add'):
                 if not is_owner(uname, OWNER_USERNAME):
+                    await self.highrise.chat(error(self.t('permission_denied')))
                     return
                 parts = msg.split()
                 if len(parts) < 3:
-                    await self.highrise.chat(error('اكتب: dj add @user'))
+                    await self.highrise.chat(error(self.t('dj_add_usage')))
                     return
                 target = normalize(parts[-1])
                 if target not in self.roles['djs']:
                     self.roles['djs'].append(target)
                     self.save_all()
-                await self.highrise.chat('\n'.join([ok('تمت إضافة DJ جديد'), info(f'@{target}')]))
+                await self.highrise.chat('\n'.join([ok(self.t('dj_added')), info(f'@{target}')]))
                 return
 
-            if msg.startswith('dj del'):
+            if msg_cf.startswith('dj del'):
                 if not is_owner(uname, OWNER_USERNAME):
+                    await self.highrise.chat(error(self.t('permission_denied')))
                     return
                 parts = msg.split()
                 if len(parts) < 3:
-                    await self.highrise.chat(error('اكتب: dj del @user'))
+                    await self.highrise.chat(error(self.t('dj_del_usage')))
                     return
                 target = normalize(parts[-1])
-                self.roles['djs'] = [x for x in self.roles['djs'] if x != target]
+                self.roles['djs'] = [x for x in self.roles['djs'] if normalize(x) != target]
+                self.roles.get('role_expiries', {}).pop(target, None)
                 self.save_all()
-                await self.highrise.chat('\n'.join([warn('تم حذف DJ'), info(f'@{target}')]))
+                await self.highrise.chat('\n'.join([warn(self.t('dj_removed')), info(f'@{target}')]))
                 return
 
-            if msg == 'dj list':
-                djs = ', '.join(self.roles['djs']) if self.roles['djs'] else 'لا يوجد'
-                await self.highrise.chat('\n'.join([title('DJ LIST'), info(djs)]))
+            if msg_cf == 'dj list':
+                djs = ', '.join(self.roles['djs']) if self.roles['djs'] else self.t('none')
+                await self.highrise.chat('\n'.join([title(self.t('dj_list_title')), info(djs)]))
                 return
 
-            if msg.casefold() in {'points', 'رصيدي', 'فلوسي'}:
-                await self.highrise.chat(ok(f'رصيدك: {self.get_points(uid)} نقطة'))
+            if msg_cf in {'points', 'رصيدي', 'فلوسي'}:
+                await self.highrise.chat(ok(self.t('your_points', points=self.get_points(uid))))
                 return
 
-            if msg.casefold() in {'daily', 'يومي'}:
+            if msg_cf in {'daily', 'يومي'}:
                 last_daily = int(self.points.setdefault('last_daily', {}).get(uid, 0))
                 if now_ts - last_daily < 86400:
                     remaining = 86400 - (now_ts - last_daily)
-                    await self.highrise.chat(warn(f'اليومي جاهز بعد {remaining // 3600} ساعة و {(remaining % 3600) // 60} دقيقة'))
+                    await self.highrise.chat(warn(self.t('daily_ready_in', hours=remaining // 3600, minutes=(remaining % 3600) // 60)))
                     return
                 self.points['last_daily'][uid] = now_ts
                 total = self.add_points(uid, DAILY_REWARD)
-                await self.highrise.chat('\n'.join([ok(f'أخذت {DAILY_REWARD} نقطة يومية'), info(f'رصيدك الآن: {total}')]))
+                await self.highrise.chat('\n'.join([ok(self.t('daily_claimed', points=DAILY_REWARD)), info(self.t('your_points_now', points=total))]))
                 return
 
-            if msg.casefold() in {'shop', 'المتجر'}:
-                await self.highrise.chat('\n'.join([
-                    title('RADIO SHOP'),
-                    info(f'DJ لمدة {DJ_DAYS} أيام = {DJ_PRICE} نقطة'),
-                ]))
+            if msg_cf in {'shop', 'المتجر'}:
+                await self.highrise.chat('\n'.join([title(self.t('shop_title')), info(self.t('shop_dj_item', days=DJ_DAYS, price=DJ_PRICE))]))
                 return
 
-            if msg.casefold() in {'buy dj', 'شراء dj'}:
+            if msg_cf in {'buy dj', 'شراء dj'}:
                 if not self.spend_points(uid, DJ_PRICE):
-                    await self.highrise.chat(error(f'نقاطك غير كافية. السعر: {DJ_PRICE} | رصيدك: {self.get_points(uid)}'))
+                    await self.highrise.chat(error(self.t('points_not_enough', price=DJ_PRICE, points=self.get_points(uid))))
                     return
                 self.grant_role(uname, 'dj', DJ_DAYS)
-                await self.highrise.chat('\n'.join([ok(f'تم شراء DJ لمدة {DJ_DAYS} أيام'), info(f'رصيدك الآن: {self.get_points(uid)}')]))
+                await self.highrise.chat('\n'.join([ok(self.t('buy_dj_success', days=DJ_DAYS)), info(self.t('your_points_now', points=self.get_points(uid)))]))
                 return
 
-            if msg.casefold() in {'myroles', 'رتبي'}:
+            if msg_cf in {'myroles', 'رتبي'}:
                 roles = self.get_active_roles(uname)
                 if not roles:
-                    await self.highrise.chat(warn('لا تملك أي رتب حالياً'))
+                    await self.highrise.chat(warn(self.t('no_roles')))
                     return
-                lines = [title('YOUR ROLES')]
+                lines = [title(self.t('your_roles'))]
                 for role_name, expiry in roles.items():
                     remaining = max(0, int(expiry) - now_ts)
-                    lines.append(info(f'{role_name.upper()} - {remaining // 86400} يوم'))
+                    lines.append(info(f'{role_name.upper()} - {self.t("days_left", days=remaining // 86400)}'))
                 await self.highrise.chat('\n'.join(lines))
                 return
 
-            if msg.casefold() in {'top', 'leaderboard', 'توب'}:
+            if msg_cf in {'top', 'leaderboard', 'توب'}:
                 top_users = sorted(self.points.get('points', {}).items(), key=lambda x: int(x[1]), reverse=True)[:10]
                 if not top_users:
-                    await self.highrise.chat(warn('لا يوجد ترتيب بعد'))
+                    await self.highrise.chat(warn(self.t('no_leaderboard')))
                     return
-                lines = [title('TOP POINTS')]
+                lines = [title(self.t('top_points'))]
                 for idx, (user_id, pts) in enumerate(top_users, start=1):
                     lines.append(info(f'{idx}. {user_id} - {pts}'))
                 await self.highrise.chat('\n'.join(lines))
                 return
 
+            if msg_cf in {'lang', 'language', 'لغة', 'dil'}:
+                current = SUPPORTED_LANGUAGES[self.lang()]
+                await self.highrise.chat('\n'.join([
+                    title(self.t('language_title')),
+                    info(self.t('current_language', language=current)),
+                    accent(available_languages_text()),
+                ]))
+                return
+
+            if msg_cf.startswith('lang ') or msg_cf.startswith('language ') or msg_cf.startswith('لغة ') or msg_cf.startswith('dil '):
+                raw_target = msg.split(maxsplit=1)[1].strip() if len(msg.split(maxsplit=1)) > 1 else ''
+                code = normalize_language_code(raw_target)
+                if not code or code not in SUPPORTED_LANGUAGES:
+                    await self.highrise.chat(error(self.t('language_invalid', languages=available_languages_text())))
+                    return
+                set_language(code)
+                await self.highrise.chat(ok(tr('language_changed', code, language=SUPPORTED_LANGUAGES[code])))
+                return
+
             if msg.startswith('-play'):
-                if not is_dj(uname, OWNER_USERNAME, self.roles['djs'], self.roles.get('role_expiries', {})):
-                    await self.highrise.chat(error('غير مسموح لك'))
+                if not self.user_is_dj(uname):
+                    await self.highrise.chat(error(self.t('dj_required')))
                     return
                 query = msg.replace('-play', '', 1).strip()
                 if not query:
-                    await self.highrise.chat(error('اكتب اسم الأغنية بعد -play'))
+                    await self.highrise.chat(error(self.t('play_usage')))
                     return
                 self.queue.append({'user': uname, 'query': query})
                 self.save_all()
-                await self.highrise.chat('\n'.join([ok('تمت إضافة الأغنية للقائمة'), title(f'🎵 {shorten(query, 38)}'), info(f'👤 بواسطة: {shorten(uname, 18)}')]))
+                await self.highrise.chat('\n'.join([ok(self.t('track_added')), title(f'🎵 {shorten(query, 38)}'), info(f'👤 {self.t("by_user", user=shorten(uname, 18))}')]))
                 return
 
-            if msg == '-queue':
+            if msg_cf == '-queue':
                 if not self.queue:
-                    await self.highrise.chat(warn('لا توجد طلبات'))
+                    await self.highrise.chat(warn(self.t('queue_empty')))
                     return
-                lines = [title('QUEUE')]
+                lines = [title(self.t('queue_title'))]
                 for i, item in enumerate(self.queue[:8], start=1):
                     lines.append(info(f"{i}. {shorten(item['query'], 34)} - @{shorten(item['user'], 14)}"))
                 await self.highrise.chat('\n'.join(lines))
                 return
 
-            if msg.startswith('-remove '):
-                if not is_dj(uname, OWNER_USERNAME, self.roles['djs'], self.roles.get('role_expiries', {})):
+            if msg_cf.startswith('-remove '):
+                if not self.user_is_dj(uname):
+                    await self.highrise.chat(error(self.t('dj_required')))
                     return
                 try:
                     idx = int(msg.split()[1]) - 1
                     removed = self.queue.pop(idx)
                     self.save_all()
-                    await self.highrise.chat(warn(f"تم حذف: {shorten(removed['query'], 28)}"))
+                    await self.highrise.chat(warn(self.t('removed_track', title=shorten(removed['query'], 28))))
                 except Exception:
-                    await self.highrise.chat(error('اكتب رقم صحيح من الكيو'))
+                    await self.highrise.chat(error(self.t('queue_invalid_number')))
                 return
 
-            if msg.startswith('-move '):
-                if not is_dj(uname, OWNER_USERNAME, self.roles['djs'], self.roles.get('role_expiries', {})):
+            if msg_cf.startswith('-move '):
+                if not self.user_is_dj(uname):
+                    await self.highrise.chat(error(self.t('dj_required')))
                     return
                 try:
                     _, a, b = msg.split()
@@ -259,12 +300,12 @@ class RadioBot(BaseBot):
                     item = self.queue.pop(src)
                     self.queue.insert(dst, item)
                     self.save_all()
-                    await self.highrise.chat(ok('تم تعديل ترتيب الكيو'))
+                    await self.highrise.chat(ok(self.t('queue_move_ok')))
                 except Exception:
-                    await self.highrise.chat(error('استخدام صحيح: -move 3 1'))
+                    await self.highrise.chat(error(self.t('queue_move_usage')))
                 return
 
-            if msg == '-np':
+            if msg_cf == '-np':
                 state = load_json(STATE_PATH, {})
                 status = state.get('status')
                 title_text = state.get('title')
@@ -272,7 +313,7 @@ class RadioBot(BaseBot):
                 meta = state.get('meta', {})
                 next_title = state.get('next_title')
                 if status not in ('starting', 'playing', 'ended') or not title_text:
-                    await self.highrise.chat(warn('لا يوجد تشغيل حالي'))
+                    await self.highrise.chat(warn(self.t('nothing_playing')))
                     return
                 duration = meta.get('duration')
                 views = meta.get('view_count', 0)
@@ -292,79 +333,82 @@ class RadioBot(BaseBot):
                 except Exception:
                     views_text = 'Unknown'
                 lines = [
-                    title('♪ NOW PLAYING'),
+                    title(f'♪ {self.t("now_playing")}'),
                     info(shorten(title_text, 34)),
                     accent(f'👤 {uploader} • 👁 {views_text}'),
                     ok(f'⏱ {duration_text} • 🎧 {shorten(requested_by or "Unknown", 16)}'),
                 ]
                 if next_title:
-                    lines.append(warn(f'▶ NEXT: {shorten(next_title, 28)}'))
+                    lines.append(warn(f'▶ {self.t("up_next")}: {shorten(next_title, 28)}'))
                 await self.highrise.chat('\n'.join(lines))
                 return
 
-            if msg == '-history':
+            if msg_cf == '-history':
                 history = load_json(HISTORY_PATH, DEFAULT_HISTORY)
                 if not history:
-                    await self.highrise.chat(warn('لا يوجد تاريخ تشغيل بعد'))
+                    await self.highrise.chat(warn(self.t('history_empty')))
                     return
-                lines = [title('RECENT TRACKS')]
+                lines = [title(self.t('history_title'))]
                 for item in history[-5:][::-1]:
                     lines.append(info(shorten(item.get('title', ''), 34)))
                 await self.highrise.chat('\n'.join(lines))
                 return
 
-            if msg == '-songlink':
+            if msg_cf == '-songlink':
                 state = load_json(STATE_PATH, {})
                 url = state.get('meta', {}).get('webpage_url', '')
                 if not url:
-                    await self.highrise.send_whisper(user.id, 'لا يوجد رابط حالي')
+                    await self.highrise.send_whisper(user.id, self.t('song_link_missing'))
                     return
                 await self.highrise.send_whisper(user.id, url)
                 return
 
-            if msg == '-clear':
+            if msg_cf == '-clear':
                 if not is_owner(uname, OWNER_USERNAME):
+                    await self.highrise.chat(error(self.t('permission_denied')))
                     return
                 self.queue = []
                 self.save_all()
                 save_json(CONTROL_PATH, {'action': 'stop', 'by': uname, 'ts': time.time()})
-                await self.highrise.chat('\n'.join([warn('تم مسح القائمة'), error('وتم إيقاف التشغيل الحالي')]))
+                await self.highrise.chat('\n'.join([warn(self.t('queue_cleared')), error(self.t('playback_stopped'))]))
                 return
 
-            if msg == '-skip':
-                if not is_dj(uname, OWNER_USERNAME, self.roles['djs'], self.roles.get('role_expiries', {})):
+            if msg_cf == '-skip':
+                if not self.user_is_dj(uname):
+                    await self.highrise.chat(error(self.t('dj_required')))
                     return
                 state = load_json(STATE_PATH, {})
-                current_title = shorten(state.get('title') or 'غير معروف', 28)
+                current_title = shorten(state.get('title') or 'Unknown', 28)
                 queue_now = load_json(QUEUE_PATH, DEFAULT_QUEUE)
                 next_title = shorten(queue_now[0].get('query', '').strip(), 28) if queue_now else (state.get('next_title') or 'AutoDJ')
                 save_json(CONTROL_PATH, {'action': 'skip', 'by': uname, 'ts': time.time()})
                 await self.highrise.chat('\n'.join([
-                    warn('تم تخطي الأغنية الحالية'),
-                    error(f'⏭ الحالية: {current_title}'),
-                    ok(f'▶ التالية: {shorten(next_title, 28)}'),
+                    warn(self.t('skip_done')),
+                    error(f'⏭ {self.t("current_track")}: {current_title}'),
+                    ok(f'▶ {self.t("up_next")}: {shorten(next_title, 28)}'),
                 ]))
                 return
 
-            if msg == '-stop':
-                if not is_dj(uname, OWNER_USERNAME, self.roles['djs'], self.roles.get('role_expiries', {})):
+            if msg_cf == '-stop':
+                if not self.user_is_dj(uname):
+                    await self.highrise.chat(error(self.t('dj_required')))
                     return
                 save_json(CONTROL_PATH, {'action': 'stop', 'by': uname, 'ts': time.time()})
-                await self.highrise.chat('\n'.join([warn('تم إرسال أمر الإيقاف'), info('سيتم إيقاف الأغنية الحالية')]))
+                await self.highrise.chat('\n'.join([warn(self.t('stop_sent')), info(self.t('stop_wait'))]))
                 return
 
-            if msg == '-library':
+            if msg_cf == '-library':
                 if not self.library:
-                    await self.highrise.chat(warn('المكتبة فارغة'))
+                    await self.highrise.chat(warn(self.t('library_empty')))
                     return
-                lines = [title('LIBRARY')]
+                lines = [title(self.t('library_title'))]
                 for i, name in enumerate(self.library[-8:], start=1):
                     lines.append(info(f'{i}. {shorten(name, 34)}'))
                 await self.highrise.chat('\n'.join(lines))
                 return
         except Exception as e:
             try:
-                await self.highrise.send_whisper(user.id, f'حصل خطأ: {e}')
+                await self.highrise.send_whisper(user.id, self.t('command_error', error=str(e)))
             except Exception:
                 pass
             print(f'[on_chat error] {e}')
