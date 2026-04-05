@@ -2,8 +2,13 @@ def normalize(username: str) -> str:
     return username.strip().lstrip('@').lower()
 
 
-def is_owner(username: str, owner_username: str) -> bool:
-    return normalize(username) == normalize(owner_username)
+def is_owner(username: str, owner_usernames) -> bool:
+    user = normalize(username)
+
+    if isinstance(owner_usernames, str):
+        owner_usernames = [owner_usernames]
+
+    return user in [normalize(x) for x in owner_usernames]
 
 
 def has_active_role(role_expiries: dict, username: str, role_name: str) -> bool:
@@ -12,12 +17,16 @@ def has_active_role(role_expiries: dict, username: str, role_name: str) -> bool:
     return int(user_roles.get(role_name.lower(), 0)) > int(time.time())
 
 
-def is_dj(username: str, owner_username: str, djs: list[str], role_expiries: dict | None = None) -> bool:
+def is_dj(username: str, owner_usernames, djs: list[str], role_expiries: dict | None = None) -> bool:
     uname = normalize(username)
-    if uname == normalize(owner_username):
+
+    if is_owner(username, owner_usernames):
         return True
+
     if uname in [normalize(x) for x in djs]:
         return True
+
     if role_expiries and has_active_role(role_expiries, username, 'dj'):
         return True
+
     return False
