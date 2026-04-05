@@ -1,2 +1,15 @@
-{
+
+  "status": "playing",
+  "title": "اغنية عم يا صياد غناء محمود الليثي  و\"انستازيا\"  من فيلم يجعلة عامر",
+  "requested_by": "Wegza",
+  "timestamp": 1775348378,
+  "meta": {
+    "duration": 339,
+    "webpage_url": "https://www.youtube.com/watch?v=8S47IghslBo",
+    "uploader": "El Sobky production السبكي للإنتاج الفني",
+    "view_count": 311082249,
+    "upload_date": "20170406",
+    "thumbnail": "https://i.ytimg.com/vi/8S47IghslBo/maxresdefault.jpg"
+  },
+  "next_title": "moonlight"
 }
