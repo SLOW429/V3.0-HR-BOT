@@ -12,7 +12,7 @@ services:
   radio-worker:
     build: .
     restart: always
-    command: python worker/stream_worker.py
+    command: sh -c "rm -f /app/data/worker.lock && python worker/stream_worker.py"
     volumes:
       - ./data:/app/data
       - ./cache:/app/cache
